@@ -240,16 +240,12 @@
     <strong>Raktiniai žodžiai:</strong> Vardas · Klientas · Kliento numeris · Skambutis · Pasiūlymas · Pasiūliau · Email · Emailas · El. paštas · Elektroninis paštas · Paštas · Susitikimas · Produkto demonstracija · Demo · Produktas · Sekantis susitikimas
   </div>
 
-  <div id="iosBanner" style="display:none;width:100%;background:#fff8e1;border:1px solid #ffe082;border-radius:10px;padding:10px 14px;font-size:12px;color:#7c5e00;text-align:center;">
-    📱 <strong>iPhone naudotojai:</strong> naudokite <strong>Safari</strong> naršyklę. Edge/Chrome iOS nepalaiko kalbos atpažinimo.<br>
-    Prieš pradedant: <strong>Settings → Safari → Microphone → Allow</strong>
+  <!-- iOS BANNER -->
+  <div id="iosBanner" style="display:none;width:100%;background:#fff8e1;border:1px solid #ffe082;border-radius:10px;padding:10px 14px;font-size:12px;color:#7c5e00;text-align:center;line-height:1.6;">
+    📱 <strong>iPhone/iPad:</strong> programa veikia tik per <strong>Safari</strong>.<br>
+    Prieš naudojant: <strong>Settings → Safari → Microphone → Allow</strong>, tada perkraukite puslapį.
   </div>
-
-  <script>
-    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
-      document.getElementById('iosBanner').style.display = 'block';
-    }
-  </script>
+  <script>if(/iPad|iPhone|iPod/.test(navigator.userAgent))document.getElementById('iosBanner').style.display='block';</script>
 
   <!-- CONTROLS -->
   <div class="controls">
@@ -448,104 +444,80 @@ function esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// iOS detection
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
 function toggleRecording() {
   if (!isRecording) startRecording(); else stopRecording();
 }
 
+function showMsg(type, html) {
+  var msg = document.getElementById('saveMsg');
+  msg.className = 'save-msg ' + type;
+  msg.innerHTML = html;
+}
+
 function startRecording() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-
   if (!SR) {
-    // iOS Edge / unsupported browser fallback
-    document.getElementById('statusText').textContent = 'Nepalaiko...';
-    document.getElementById('saveMsg').className = 'save-msg error';
-    document.getElementById('saveMsg').innerHTML =
-      '<strong>⚠️ Šis įrenginys nepalaiko automatinio kalbos atpažinimo.</strong><br>' +
-      'iPhone naudokite <strong>Safari</strong> naršyklę. ' +
-      'Arba įjunkite: <em>Settings → Safari → Microphone → Allow</em>';
+    showMsg('error', '\u26a0\ufe0f Nepalaiko kalbos atpazinimo.<br>' +
+      (isIOS ? '<strong>iPhone: naudokite Safari narsykle.</strong>' : 'Naudokite Chrome arba Edge.'));
     return;
   }
 
-  // iOS Safari requires getUserMedia first to trigger mic permission prompt
-  if (isIOS) {
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(function(stream) {
-        stream.getTracks().forEach(t => t.stop()); // release stream, SR handles it
-        initSpeechRecognition(SR);
-      })
-      .catch(function(err) {
-        document.getElementById('saveMsg').className = 'save-msg error';
-        document.getElementById('saveMsg').innerHTML =
-          '⚠️ Mikrofonas nesuteiktas. Eikite į <strong>Settings → Safari → Microphone</strong> ir leiskite prieigą.';
-      });
-  } else {
-    initSpeechRecognition(SR);
-  }
-}
-
-function initSpeechRecognition(SR) {
+  // CRITICAL for iOS: create and call .start() synchronously in the same
+  // user-gesture call stack - no await, no setTimeout before .start()
   recognition = new SR();
-  // Try lt-LT first, fall back to lt if not supported
   recognition.lang = 'lt-LT';
-  recognition.continuous = !isIOS; // iOS doesn't support continuous mode
-  recognition.interimResults = !isIOS; // iOS doesn't support interim results
+  recognition.continuous = false;   // iOS requires false
+  recognition.interimResults = false; // iOS requires false
 
-  recognition.onstart = () => {
+  recognition.onstart = function() {
     isRecording = true;
     autoSaveDone = false;
     document.getElementById('btnRecord').classList.add('recording');
     document.getElementById('recIcon').className = 'ti ti-player-stop';
     document.getElementById('recLabel').textContent = 'Sustabdyti';
     document.getElementById('statusDot').classList.add('active');
-    document.getElementById('statusText').textContent = isIOS ? 'Įrašoma (iOS)...' : 'Įrašoma...';
+    document.getElementById('statusText').textContent = 'Irasoma...';
     startTime = Date.now();
     timerInterval = setInterval(updateTimer, 1000);
   };
 
-  recognition.onresult = (e) => {
-    let interim = '', final = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) final += t; else interim += t;
+  recognition.onresult = function(e) {
+    for (var i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        fullTranscript += ' ' + e.results[i][0].transcript;
+      }
     }
-    if (final) fullTranscript += ' ' + final;
-    interimText = interim;
     updateDisplay();
   };
 
-  recognition.onerror = (e) => {
+  recognition.onerror = function(e) {
     console.log('SR error:', e.error);
     if (e.error === 'not-allowed') {
-      document.getElementById('saveMsg').className = 'save-msg error';
-      document.getElementById('saveMsg').innerHTML =
-        '⚠️ Mikrofonas užblokuotas.<br>' +
+      showMsg('error', '\u26a0\ufe0f Mikrofonas nesuteiktas.<br>' +
         (isIOS
-          ? 'iPhone: <strong>Settings → Safari → Microphone → Allow</strong>'
-          : 'Leiskite mikrofono prieigą naršyklėje.');
-    } else if (e.error === 'no-speech') {
-      // iOS fires no-speech often - just restart
-      if (isRecording) { recognition.stop(); return; }
-    } else if (e.error === 'network') {
-      document.getElementById('statusText').textContent = 'Tinklo klaida...';
+          ? 'iPhone: <strong>Settings \u2192 Safari \u2192 Microphone \u2192 Allow</strong>, tada perkraukite puslapi.'
+          : 'Leiskite mikrofono prieiga narsykleje.'));
+      stopRecording();
     }
-    if (e.error !== 'no-speech') stopRecording();
+    // no-speech and other errors: let onend handle restart
   };
 
-  recognition.onend = () => {
+  recognition.onend = function() {
     if (isRecording) {
-      // iOS: restart after each utterance (no continuous mode)
-      try { recognition.start(); } catch(ex) {}
+      setTimeout(function() {
+        if (isRecording) {
+          try { recognition.start(); } catch(ex) { console.log('restart:', ex); }
+        }
+      }, 150);
     }
   };
 
   try {
     recognition.start();
-  } catch(e) {
-    console.error('SR start error:', e);
+  } catch(ex) {
+    showMsg('error', '\u26a0\ufe0f Klaida: ' + ex.message);
   }
 }
 
