@@ -240,6 +240,17 @@
     <strong>Raktiniai žodžiai:</strong> Vardas · Klientas · Kliento numeris · Skambutis · Pasiūlymas · Pasiūliau · Email · Emailas · El. paštas · Elektroninis paštas · Paštas · Susitikimas · Produkto demonstracija · Demo · Produktas · Sekantis susitikimas
   </div>
 
+  <div id="iosBanner" style="display:none;width:100%;background:#fff8e1;border:1px solid #ffe082;border-radius:10px;padding:10px 14px;font-size:12px;color:#7c5e00;text-align:center;">
+    📱 <strong>iPhone naudotojai:</strong> naudokite <strong>Safari</strong> naršyklę. Edge/Chrome iOS nepalaiko kalbos atpažinimo.<br>
+    Prieš pradedant: <strong>Settings → Safari → Microphone → Allow</strong>
+  </div>
+
+  <script>
+    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+      document.getElementById('iosBanner').style.display = 'block';
+    }
+  </script>
+
   <!-- CONTROLS -->
   <div class="controls">
     <button class="btn-record" id="btnRecord" onclick="toggleRecording()">
@@ -437,18 +448,51 @@ function esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// iOS detection
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
 function toggleRecording() {
   if (!isRecording) startRecording(); else stopRecording();
 }
 
 function startRecording() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { alert('Jūsų naršyklė nepalaiko kalbos atpažinimo. Naudokite Chrome arba Edge.'); return; }
 
+  if (!SR) {
+    // iOS Edge / unsupported browser fallback
+    document.getElementById('statusText').textContent = 'Nepalaiko...';
+    document.getElementById('saveMsg').className = 'save-msg error';
+    document.getElementById('saveMsg').innerHTML =
+      '<strong>⚠️ Šis įrenginys nepalaiko automatinio kalbos atpažinimo.</strong><br>' +
+      'iPhone naudokite <strong>Safari</strong> naršyklę. ' +
+      'Arba įjunkite: <em>Settings → Safari → Microphone → Allow</em>';
+    return;
+  }
+
+  // iOS Safari requires getUserMedia first to trigger mic permission prompt
+  if (isIOS) {
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(function(stream) {
+        stream.getTracks().forEach(t => t.stop()); // release stream, SR handles it
+        initSpeechRecognition(SR);
+      })
+      .catch(function(err) {
+        document.getElementById('saveMsg').className = 'save-msg error';
+        document.getElementById('saveMsg').innerHTML =
+          '⚠️ Mikrofonas nesuteiktas. Eikite į <strong>Settings → Safari → Microphone</strong> ir leiskite prieigą.';
+      });
+  } else {
+    initSpeechRecognition(SR);
+  }
+}
+
+function initSpeechRecognition(SR) {
   recognition = new SR();
+  // Try lt-LT first, fall back to lt if not supported
   recognition.lang = 'lt-LT';
-  recognition.continuous = true;
-  recognition.interimResults = true;
+  recognition.continuous = !isIOS; // iOS doesn't support continuous mode
+  recognition.interimResults = !isIOS; // iOS doesn't support interim results
 
   recognition.onstart = () => {
     isRecording = true;
@@ -457,7 +501,7 @@ function startRecording() {
     document.getElementById('recIcon').className = 'ti ti-player-stop';
     document.getElementById('recLabel').textContent = 'Sustabdyti';
     document.getElementById('statusDot').classList.add('active');
-    document.getElementById('statusText').textContent = 'Įrašoma...';
+    document.getElementById('statusText').textContent = isIOS ? 'Įrašoma (iOS)...' : 'Įrašoma...';
     startTime = Date.now();
     timerInterval = setInterval(updateTimer, 1000);
   };
@@ -474,12 +518,35 @@ function startRecording() {
   };
 
   recognition.onerror = (e) => {
-    if (e.error === 'not-allowed') alert('Mikrofonas užblokuotas. Leiskite prieigą naršyklėje.');
-    stopRecording();
+    console.log('SR error:', e.error);
+    if (e.error === 'not-allowed') {
+      document.getElementById('saveMsg').className = 'save-msg error';
+      document.getElementById('saveMsg').innerHTML =
+        '⚠️ Mikrofonas užblokuotas.<br>' +
+        (isIOS
+          ? 'iPhone: <strong>Settings → Safari → Microphone → Allow</strong>'
+          : 'Leiskite mikrofono prieigą naršyklėje.');
+    } else if (e.error === 'no-speech') {
+      // iOS fires no-speech often - just restart
+      if (isRecording) { recognition.stop(); return; }
+    } else if (e.error === 'network') {
+      document.getElementById('statusText').textContent = 'Tinklo klaida...';
+    }
+    if (e.error !== 'no-speech') stopRecording();
   };
 
-  recognition.onend = () => { if (isRecording) recognition.start(); };
-  recognition.start();
+  recognition.onend = () => {
+    if (isRecording) {
+      // iOS: restart after each utterance (no continuous mode)
+      try { recognition.start(); } catch(ex) {}
+    }
+  };
+
+  try {
+    recognition.start();
+  } catch(e) {
+    console.error('SR start error:', e);
+  }
 }
 
 function stopRecording() {
